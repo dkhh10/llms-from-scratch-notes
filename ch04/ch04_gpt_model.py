@@ -1,8 +1,16 @@
 """
-GPT model architecture from Chapter 4 of "Build a Large Language Model from Scratch"
-by Sebastian Raschka.
+GPT model architecture and helpers from Chapter 4 of
+"Build a Large Language Model from Scratch" by Sebastian Raschka.
 
-Exports the GPT model and its building blocks for reuse in later chapters.
+Includes every reusable class and function defined in the chapter:
+  - Configs:                      GPT_CONFIG_124M, GPT_CONFIG_GPT_2_medium,
+                                  GPT_CONFIG_GPT_2_large, GPT_CONFIG_GPT_2_xl
+  - Real building blocks:         MultiHeadAttention, LayerNorm, GELU,
+                                  FeedForward, TransformerBlock, GPTModel
+  - Pedagogical placeholders:     DummyGPTModel, DummyTransformerBlock,
+                                  DummyLayerNorm
+  - Shortcut-connection demo:     ExampleDeepNeuralNetwork, print_gradients
+  - Text generation:              generate_text_simple
 """
 
 import torch
@@ -19,6 +27,39 @@ GPT_CONFIG_124M = {
     "emb_dim": 768,
     "n_heads": 12,
     "n_layers": 12,
+    "drop_rate": 0.1,
+    "qkv_bias": False,
+}
+
+# Larger GPT-2 variants (from Exercise 4.2). Only emb_dim, n_heads, and
+# n_layers change between sizes; vocab/context/dropout/bias stay fixed.
+
+GPT_CONFIG_GPT_2_medium = {
+    "vocab_size": 50257,
+    "context_length": 1024,
+    "emb_dim": 1024,
+    "n_heads": 16,
+    "n_layers": 24,
+    "drop_rate": 0.1,
+    "qkv_bias": False,
+}
+
+GPT_CONFIG_GPT_2_large = {
+    "vocab_size": 50257,
+    "context_length": 1024,
+    "emb_dim": 1280,
+    "n_heads": 20,
+    "n_layers": 36,
+    "drop_rate": 0.1,
+    "qkv_bias": False,
+}
+
+GPT_CONFIG_GPT_2_xl = {
+    "vocab_size": 50257,
+    "context_length": 1024,
+    "emb_dim": 1600,
+    "n_heads": 25,
+    "n_layers": 48,
     "drop_rate": 0.1,
     "qkv_bias": False,
 }
@@ -54,17 +95,14 @@ class MultiHeadAttention(nn.Module):
         queries = self.W_query(x)
         values = self.W_value(x)
 
-        # Split into heads: (b, num_tokens, num_heads, head_dim)
         keys = keys.view(b, num_tokens, self.num_heads, self.head_dim)
         values = values.view(b, num_tokens, self.num_heads, self.head_dim)
         queries = queries.view(b, num_tokens, self.num_heads, self.head_dim)
 
-        # Transpose to (b, num_heads, num_tokens, head_dim)
         keys = keys.transpose(1, 2)
         queries = queries.transpose(1, 2)
         values = values.transpose(1, 2)
 
-        # Scaled dot-product attention with causal mask
         attn_scores = queries @ keys.transpose(2, 3)
         mask_bool = self.mask.bool()[:num_tokens, :num_tokens]
         attn_scores.masked_fill_(mask_bool, -torch.inf)
@@ -72,7 +110,6 @@ class MultiHeadAttention(nn.Module):
         attn_weights = torch.softmax(attn_scores / keys.shape[-1] ** 0.5, dim=-1)
         attn_weights = self.dropout(attn_weights)
 
-        # Combine heads back: (b, num_tokens, d_out)
         context_vec = (attn_weights @ values).transpose(1, 2)
         context_vec = context_vec.contiguous().view(b, num_tokens, self.d_out)
         context_vec = self.out_proj(context_vec)
@@ -199,6 +236,100 @@ class GPTModel(nn.Module):
         return logits
 
 
+# ---------------------------------------------------------------------------
+# Dummy placeholder classes (from section 4.1, used before the real ones
+# are introduced — kept for completeness)
+# ---------------------------------------------------------------------------
+
+class DummyGPTModel(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.tok_emb = nn.Embedding(cfg["vocab_size"], cfg["emb_dim"])
+        self.pos_emb = nn.Embedding(cfg["context_length"], cfg["emb_dim"])
+        self.drop_emb = nn.Dropout(cfg["drop_rate"])
+        self.trf_blocks = nn.Sequential(
+            *[DummyTransformerBlock(cfg) for _ in range(cfg["n_layers"])]
+        )
+        self.final_norm = DummyLayerNorm(cfg["emb_dim"])
+        self.out_head = nn.Linear(cfg["emb_dim"], cfg["vocab_size"], bias=False)
+
+    def forward(self, in_idx):
+        batch_size, seq_len = in_idx.shape
+        tok_embeds = self.tok_emb(in_idx)
+        pos_embeds = self.pos_emb(torch.arange(seq_len, device=in_idx.device))
+        x = tok_embeds + pos_embeds
+        x = self.drop_emb(x)
+        x = self.trf_blocks(x)
+        x = self.final_norm(x)
+        logits = self.out_head(x)
+        return logits
+
+
+class DummyTransformerBlock(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+
+    def forward(self, x):
+        return x
+
+
+class DummyLayerNorm(nn.Module):
+    def __init__(self, normalized_shape, eps=1e-5):
+        super().__init__()
+
+    def forward(self, x):
+        return x
+
+
+# ---------------------------------------------------------------------------
+# Demo: deep net with optional shortcut connections (from section 4.4)
+# ---------------------------------------------------------------------------
+
+class ExampleDeepNeuralNetwork(nn.Module):
+    """Stack of 5 Linear+GELU blocks. Optionally adds residual shortcuts
+    when consecutive layers have matching shapes."""
+
+    def __init__(self, layer_sizes, use_shortcut):
+        super().__init__()
+        self.use_shortcut = use_shortcut
+        self.layers = nn.ModuleList([
+            nn.Sequential(nn.Linear(layer_sizes[0], layer_sizes[1]), GELU()),
+            nn.Sequential(nn.Linear(layer_sizes[1], layer_sizes[2]), GELU()),
+            nn.Sequential(nn.Linear(layer_sizes[2], layer_sizes[3]), GELU()),
+            nn.Sequential(nn.Linear(layer_sizes[3], layer_sizes[4]), GELU()),
+            nn.Sequential(nn.Linear(layer_sizes[4], layer_sizes[5]), GELU()),
+        ])
+
+    def forward(self, x):
+        for layer in self.layers:
+            layer_output = layer(x)
+            if self.use_shortcut and x.shape == layer_output.shape:
+                x = x + layer_output
+            else:
+                x = layer_output
+        return x
+
+
+def print_gradients(model, x):
+    """Run a single forward/backward pass with MSE loss to target=0,
+    then print the mean absolute gradient of every weight parameter.
+    Used to illustrate vanishing gradients without residual connections."""
+    output = model(x)
+    target = torch.tensor([[0.]])
+
+    loss = nn.MSELoss()
+    loss = loss(output, target)
+    loss.backward()
+
+    for name, param in model.named_parameters():
+        if "weight" in name:
+            print(f"{name} has gradient mean of {param.grad.abs().mean().item()}")
+
+
+# ---------------------------------------------------------------------------
+# Greedy autoregressive text generation (from section 4.7)
+# ---------------------------------------------------------------------------
+
 def generate_text_simple(model, idx, max_new_tokens, context_size):
     """Greedy autoregressive text generation.
 
@@ -209,16 +340,13 @@ def generate_text_simple(model, idx, max_new_tokens, context_size):
         context_size: max context window the model can attend to
     """
     for _ in range(max_new_tokens):
-        # Crop current context to last context_size tokens
         idx_cond = idx[:, -context_size:]
         with torch.no_grad():
             logits = model(idx_cond)
-        # Focus on last time step's logits — shape (batch, vocab_size)
+
         logits = logits[:, -1, :]
-        # Convert to probabilities
         probas = torch.softmax(logits, dim=-1)
-        # Take the highest-probability token (greedy)
         idx_next = torch.argmax(probas, dim=-1, keepdim=True)
-        # Append to the running sequence
         idx = torch.cat((idx, idx_next), dim=1)
+
     return idx
