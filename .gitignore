@@ -223,3 +223,9 @@ __marimo__/
 .DS_Store
 .AppleDouble
 .LSOverride
+
+# Model parameters
+*.pt
+*.pth
+*.ckpt
+checkpoints/
