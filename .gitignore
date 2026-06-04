@@ -229,3 +229,4 @@ __marimo__/
 *.pth
 *.ckpt
 checkpoints/
+gpt2/
